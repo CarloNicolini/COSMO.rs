@@ -1,11 +1,3 @@
-<div align="right">
-  <img src="https://github.com/migarstka/COSMO_assets/raw/master/star_badge_3.png" width="6%" alt="" />
-</div>
-
-<h1 align="center">
-  <img src="https://github.com/migarstka/COSMO_assets/raw/master/cosmo_rocket_with_convex_set.png" width="70%" alt="COSMO" />
-</h1>
-
 <p align="center">
   <a href="https://github.com/CarloNicolini/COSMO.rs/actions"><img src="https://img.shields.io/github/actions/workflow/status/CarloNicolini/COSMO.rs/ci.yml?branch=main" alt="CI" /></a>
   <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License" /></a>
@@ -123,6 +115,11 @@ cargo run --example lp
 cargo run --example socp
 cargo run --example expcone
 cargo run --example powcone
+
+# Python / CVXPY (see also [#python--cvxpy](#python--cvxpy))
+uv run python examples/python/cvxpy_qp.py
+uv run python examples/python/cvxpy_socp.py
+uv run python examples/python/cvxpy_lp.py
 ```
 
 ### Warm starts and updates
@@ -169,6 +166,10 @@ println!("{:?}", solver.solve().unwrap().x);
 
 ## Python & CVXPY
 
+Low-level bindings (`cosmo_rs.CosmoSolver`) and a CVXPY conic interface (`COSMO_RUST`) are available after installing the Python package (see [Installation](#installation)).
+
+### Low-level API
+
 ```python
 import numpy as np
 from scipy import sparse
@@ -189,21 +190,62 @@ solver = CosmoSolver(
 print(solver.solve().x)
 ```
 
-With CVXPY:
+### CVXPY
+
+Register once, then pass `solver="COSMO_RUST"` (or `solver=COSMO_RUST()`):
 
 ```python
 import cvxpy as cp
+import numpy as np
 from cosmo_rs.cvxpy_interface import register
 
 register()
 
+# Quadratic program (same data as the Rust QP example)
+P = np.array([[6.0, 0.0], [0.0, 4.0]])
+q = np.array([-1.0, -4.0])
 x = cp.Variable(2)
 prob = cp.Problem(
-    cp.Minimize(cp.sum_squares(x)),
-    [x >= 0, cp.sum(x) == 1],
+    cp.Minimize(0.5 * cp.quad_form(x, P) + q @ x),
+    [x[0] - 2 * x[1] == 0, x >= -1, x <= 1],
+)
+prob.solve(solver="COSMO_RUST", verbose=True)
+print(prob.status, x.value, prob.value)
+```
+
+Second-order cone:
+
+```python
+x = cp.Variable(2)
+prob = cp.Problem(
+    cp.Minimize(cp.square(x[1])),
+    [cp.norm(cp.hstack([2 - 2 * x[0], -2 - x[1]]), 2) <= 1],
 )
 prob.solve(solver="COSMO_RUST")
 print(prob.status, x.value)
+```
+
+Simplex projection (instance API):
+
+```python
+from cosmo_rs.cvxpy_interface import COSMO_RUST
+
+y = cp.Variable(3, nonneg=True)
+target = np.array([0.8, 0.5, -0.1])
+prob = cp.Problem(cp.Minimize(cp.sum_squares(y - target)), [cp.sum(y) == 1])
+prob.solve(solver=COSMO_RUST())
+print(prob.status, y.value)
+```
+
+Runnable scripts:
+
+```bash
+# after: uv sync && uv pip install cvxpy
+#    or: maturin develop --features python && pip install cvxpy
+uv run python examples/python/cvxpy_qp.py
+uv run python examples/python/cvxpy_socp.py
+uv run python examples/python/cvxpy_lp.py
+uv run python examples/python/bench_qp.py
 ```
 
 There is **no Julia dependency**.
