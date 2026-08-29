@@ -54,6 +54,14 @@ path = "examples/rust/example_expcone.rs"
 name = "powcone"
 path = "examples/rust/example_powcone.rs"
 
+[[example]]
+name = "cosmo_jl_lp"
+path = "examples/rust/example_cosmo_jl_lp.rs"
+
+[[example]]
+name = "cosmo_jl_qp"
+path = "examples/rust/example_cosmo_jl_qp.rs"
+
 [profile.release]
 lto = true
 codegen-units = 1

@@ -6,6 +6,8 @@ This file states what COSMO.rs does **not** claim.
 
 - COSMO is ADMM, not Clarabel's interior-point method. Iterates, residuals, and runtimes will differ even on identical data.
 - Default tolerances (`1e-5`) are COSMO.jl defaults, looser than typical IPM `1e-8`.
+- Extreme constraint scaling (e.g. multiplying `A` and `b` by `1e±8`) can make ADMM stall or report a wrong `Solved` while Clarabel.rs still converges — see `tests/stress_vs_clarabel.rs` and [`docs/benchmarks.md`](benchmarks.md).
+- Freezing a tiny ρ (`rho=1e-6`, `adaptive_rho=false`) can prevent convergence within a few thousand iterations on otherwise easy QPs.
 - First-order methods can require thousands of iterations on badly scaled or tightly constrained problems. Clarabel is often faster and more accurate on small/medium conic problems.
 
 ## Cones

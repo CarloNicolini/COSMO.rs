@@ -1,16 +1,63 @@
-# Numerical comparison vs Clarabel.rs
+# Numerical comparison vs Clarabel.rs and COSMO.jl
 
 Rust integration tests solve each instance with COSMO.rs (ADMM) and, where
 the cone type is supported, with Clarabel.rs (`DefaultSolver`, interior point).
+Selected problems are also cross-checked against [COSMO.jl](https://github.com/oxfordcontrol/COSMO.jl).
+
 SDP is not generated. Wall-clock is not the figure of merit: this is a
 **correctness** suite.
 
-Run:
+```bash
+cargo test
+cargo test --test clarabel_benchmark extensive -- --nocapture
+cargo test --test stress_vs_clarabel -- --nocapture
+
+# optional: Julia reference (needs COSMO.jl)
+julia --project=/tmp/cosmo-compare examples/julia/compare_textbook.jl
+```
+
+## Clarabel textbook + COSMO.jl examples
+
+`tests/stress_vs_clarabel.rs::clarabel_and_cosmo_jl_examples_agree` ports:
+
+| Name | Source | Expected |
+|---|---|---|
+| `cosmo_jl_qp` | COSMO.jl `examples/qp.jl` / Clarabel `basic_qp` | x≈(0.3,0.7), obj≈1.88 |
+| `cosmo_jl_lp` | COSMO.jl `examples/lp.jl` | x≈(3,5,1,1), obj≈20 |
+| `cosmo_jl_box_qp` | COSMO.jl `qp-box.jl` | obj≈−0.5 |
+| `clarabel_qp` / `lp` / `socp` | Clarabel.rs examples | match Clarabel.rs |
+| `clarabel_exp` | Clarabel / COSMO.jl exp cone | obj≈−5 |
+| `clarabel_power` | Clarabel / COSMO.jl power cone | obj≈−1.8458 |
+
+Latest run: **8 / 8** agree with Clarabel; golden values match COSMO.jl.
+
+Standalone runners:
 
 ```bash
-cargo test --test clarabel_benchmark extensive -- --nocapture
-cargo test
+cargo run --example cosmo_jl_qp
+cargo run --example cosmo_jl_lp
+cargo run --example qp   # Clarabel textbook QP
 ```
+
+## Stress: COSMO fails while Clarabel converges
+
+`tests/stress_vs_clarabel.rs::stress_cosmo_fail_while_clarabel_ok` probes
+scaling, ρ, and conditioning. Latest run found **3** gaps where Clarabel
+reports `Solved` but COSMO.rs does not agree:
+
+| Case | Clarabel | COSMO.rs | Notes |
+|---|---|---|---|
+| `scale_A_1e8` | Solved | MaxIterReached | Constraint rows ×1e8; ADMM residuals stall |
+| `scale_A_1e-8` | Solved | Solved (wrong x/obj) | Rel obj error ~0.75 despite `Solved` |
+| `tiny_rho_no_adapt_qp` | Solved | MaxIterReached | ρ=1e−6, `adaptive_rho=false`, 2k iters |
+
+Cases that look hard but currently **agree**:
+
+- `scale_q_1e6`, `near_singular_eq`, `huge_exp_12`, `large_soc_64`, `tight_tol_1e8_qp`
+
+Cases where **both** struggle (`InsufficientProgress` / infeasible):
+
+- `scale_P_1e-12`, `scale_A_1e12_no_ruiz`, `illcond_A_eps_on_qp` (both primal infeasible)
 
 ## Latest `cargo test --test clarabel_benchmark extensive -- --nocapture`
 
@@ -68,4 +115,4 @@ status or `Max_iter_reached`.
 
 - COSMO.rs is not faster than Clarabel.rs on these small instances (Newton vs ADMM).
 - SDP, ND power cones, and chordal decomposition are not tested.
-- Portfolio / skfolio sequences are not in this suite.
+- Extreme row scaling of `A` (see stress table) can still break ADMM while Clarabel succeeds.

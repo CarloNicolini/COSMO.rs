@@ -115,6 +115,8 @@ cargo run --example lp
 cargo run --example socp
 cargo run --example expcone
 cargo run --example powcone
+cargo run --example cosmo_jl_qp   # COSMO.jl examples/qp.jl
+cargo run --example cosmo_jl_lp   # COSMO.jl examples/lp.jl
 
 # Python / CVXPY (see also [#python--cvxpy](#python--cvxpy))
 uv run python examples/python/cvxpy_qp.py
@@ -255,9 +257,13 @@ There is **no Julia dependency**.
 ```bash
 cargo test
 cargo test --test clarabel_benchmark extensive -- --nocapture
+cargo test --test stress_vs_clarabel -- --nocapture
+
+# optional: Julia reference (COSMO.jl)
+julia --project=/tmp/cosmo-compare examples/julia/compare_textbook.jl
 ```
 
-The Clarabel.rs comparison suite currently covers 172 instances (LP, QP, SOCP, exp, power, mixed cones, infeasible). See [`docs/benchmarks.md`](docs/benchmarks.md).
+The Clarabel.rs suite covers 172 instances. A separate stress suite catalogs cases where Clarabel converges but COSMO.rs stalls (extreme `A` scaling, frozen tiny ρ). See [`docs/benchmarks.md`](docs/benchmarks.md).
 
 ## Citing
 
