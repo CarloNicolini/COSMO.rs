@@ -1,0 +1,26 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "cosmo-rs"
+requires-python = ">=3.9"
+dynamic = ["version"]
+description = "Native Rust COSMO solver with a CVXPY interface"
+dependencies = [
+    "numpy",
+    "scipy",
+]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+]
+
+[project.optional-dependencies]
+cvxpy = ["cvxpy>=1.5"]
+test = ["cvxpy>=1.5", "pytest", "numpy", "scipy"]
+
+[tool.maturin]
+features = ["python"]
+python-source = "python"
+module-name = "cosmo_rs._cosmo"

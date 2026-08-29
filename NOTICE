@@ -1,0 +1,41 @@
+COSMO.rs
+Copyright 2026 COSMO.rs contributors
+
+This product includes software derived from, and is algorithmically based on:
+
+COSMO.jl
+Copyright the COSMO.jl authors (Michael Garstka, Mark Cannon, Paul Goulart and contributors)
+Licensed under the Apache License, Version 2.0
+https://github.com/oxfordcontrol/COSMO.jl
+
+Clarabel.rs
+Copyright Paul Goulart and the Clarabel.rs authors
+Licensed under the Apache License, Version 2.0
+https://github.com/oxfordcontrol/Clarabel.rs
+
+COSMO.rs reuses Clarabel.rs sparse CSC types and the QDLDL factorisation
+backend as a numerical substrate. The ADMM / operator-splitting
+algorithm, cone projection operators required by COSMO, rho adaptation,
+infeasibility certificates, and termination criteria are implemented
+independently and are not Clarabel's interior-point method.
+
+Anderson acceleration in this crate is a Rust reimplementation of the
+Type-II / QR / RestartedMemory accelerator from:
+
+COSMOAccelerators.jl
+Copyright 2021 Michael Garstka and contributors
+Licensed under the MIT License
+https://github.com/oxfordcontrol/COSMOAccelerators.jl
+
+The exponential-cone projection follows the bisection dual method used
+by COSMO.jl, itself a modified version of the projection in SCS
+(https://github.com/cvxgrp/scs). The power-cone projection follows
+Hien, "Differential properties of Euclidean projections onto power cones"
+(2015), as implemented in COSMO.jl.
+
+The COSMO algorithm is described in:
+
+  Garstka, Cannon, Goulart,
+  "COSMO: A Conic Operator Splitting Method for Convex Conic Problems",
+  Journal of Optimization Theory and Applications, 190:779–810, 2021.
+  https://doi.org/10.1007/s10957-021-01896-x

@@ -1,0 +1,62 @@
+[package]
+name = "cosmo"
+version = "0.1.0"
+authors = ["COSMO.rs contributors"]
+edition = "2021"
+rust-version = "1.70"
+license = "Apache-2.0"
+description = "Native Rust COSMO solver: conic operator splitting (ADMM) for convex quadratic-conic programs"
+readme = "README.md"
+repository = "https://github.com/CarloNicolini/COSMO.rs"
+keywords = ["convex", "optimization", "conic", "admm", "solver"]
+categories = ["mathematics"]
+resolver = "2"
+
+[dependencies]
+clarabel = "0.11"
+thiserror = "1.0"
+num-traits = "0.2"
+
+[dependencies.pyo3]
+optional = true
+version = "0.25"
+features = ["extension-module", "abi3-py39"]
+
+[features]
+default = []
+python = ["dep:pyo3"]
+
+[lib]
+name = "cosmo"
+crate-type = ["lib", "cdylib"]
+
+[dev-dependencies]
+rand = "0.8"
+rand_chacha = "0.3"
+
+[[example]]
+name = "qp"
+path = "examples/rust/example_qp.rs"
+
+[[example]]
+name = "lp"
+path = "examples/rust/example_lp.rs"
+
+[[example]]
+name = "socp"
+path = "examples/rust/example_socp.rs"
+
+[[example]]
+name = "expcone"
+path = "examples/rust/example_expcone.rs"
+
+[[example]]
+name = "powcone"
+path = "examples/rust/example_powcone.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[profile.bench]
+debug = true
