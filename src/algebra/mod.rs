@@ -40,6 +40,16 @@ pub fn gemv(A: &CscMatrix<f64>, y: &mut [f64], x: &[f64], a: f64, b: f64) {
 pub fn gemv_t(A: &CscMatrix<f64>, y: &mut [f64], x: &[f64], a: f64, b: f64) {
     debug_assert_eq!(y.len(), A.n);
     debug_assert_eq!(x.len(), A.m);
+    if b == 0.0 {
+        for col in 0..A.n {
+            let mut s = 0.0;
+            for j in A.colptr[col]..A.colptr[col + 1] {
+                s += A.nzval[j] * x[A.rowval[j]];
+            }
+            y[col] = a * s;
+        }
+        return;
+    }
     for col in 0..A.n {
         let mut s = 0.0;
         for j in A.colptr[col]..A.colptr[col + 1] {

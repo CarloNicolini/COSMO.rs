@@ -67,7 +67,7 @@ Qualitative (measured in solver timings fields):
 - Factorisation reuse: `update_q`/`update_b` skip AMD + numeric factor
 - Scaling reuse: after the first `solve`, Ruiz is not recomputed
 
-Quantitative tables belong in `benchmarks/results/` after `cargo test` and optional Python benches.
+Quantitative tables belong in `benchmarks/results/` after `cargo test` and optional Python benches. Hot-path notes and a release microbench summary live in `docs/performance.md`.
 
 ## K. CVXPY readiness
 
