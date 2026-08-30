@@ -285,7 +285,7 @@ cargo test --test stress_vs_clarabel -- --nocapture
 julia --project=/tmp/cosmo-compare examples/julia/compare_textbook.jl
 ```
 
-The Clarabel.rs suite covers 172 instances. A separate stress suite catalogs cases where Clarabel converges but COSMO.rs stalls (extreme `A` scaling, frozen tiny ρ). See [`docs/benchmarks.md`](docs/benchmarks.md).
+The Clarabel.rs suite covers 172 instances. A separate stress suite catalogs cases where Clarabel converges but COSMO.rs stalls (extreme `A` scaling, frozen tiny ρ). See [`docs/benchmarks.md`](docs/benchmarks.md). Hot-path microbench notes: [`docs/performance.md`](docs/performance.md).
 
 ## Citing
 

@@ -6,8 +6,8 @@ use std::time::Instant;
 
 use crate::accelerator::{residual_norm, AndersonAccelerator};
 use crate::algebra::{
-    copy, gemv, gemv_t, inf_norm, inf_norm_scaled, quad_form, scale, symv, to_symmetric_triu,
-    CscMatrix, MatrixMathMut,
+    copy, gemv, gemv_t, inf_norm, inf_norm_scaled, scale, symv, to_symmetric_triu, CscMatrix,
+    MatrixMathMut,
 };
 use crate::cones::{CompositeCone, Cone};
 use crate::linsys::{KktError, QdldlKktSolver};
@@ -53,7 +53,6 @@ pub struct CosmoSolver {
     s: Vec<f64>,
     mu: Vec<f64>,
     s_tl: Vec<f64>,
-    ls: Vec<f64>,
     sol: Vec<f64>,
     dx: Vec<f64>,
     dy: Vec<f64>,
@@ -121,7 +120,6 @@ impl CosmoSolver {
             s: vec![0.0; m],
             mu: vec![0.0; m],
             s_tl: vec![0.0; m],
-            ls: vec![0.0; n + m],
             sol: vec![0.0; n + m],
             dx: vec![0.0; n],
             dy: vec![0.0; m],
@@ -224,14 +222,16 @@ impl CosmoSolver {
 
             self.acceleration_post(&mut times, sigma);
 
+            let mut residuals_ready = false;
             if iter == 1 || iter % self.settings.check_termination == 0 {
                 self.recover_mu();
-                let (rp, rd, mnp, mnd) = self.calculate_residuals(false);
+                let (rp, rd, mnp, mnd, c) = self.calculate_residuals_and_cost(false);
                 r_prim = rp;
                 r_dual = rd;
                 max_norm_prim = mnp;
                 max_norm_dual = mnd;
-                cost = self.calculate_cost();
+                cost = c;
+                residuals_ready = true;
                 if cost.abs() > 1e20 {
                     status = SolverStatus::Unsolved;
                     break;
@@ -249,13 +249,15 @@ impl CosmoSolver {
                 infeas_due = true;
             } else if infeas_due && self.accel_allows_update() {
                 infeas_due = false;
-                self.recover_mu();
-                let (rp, rd, mnp, mnd) = self.calculate_residuals(false);
-                r_prim = rp;
-                r_dual = rd;
-                max_norm_prim = mnp;
-                max_norm_dual = mnd;
-                cost = self.calculate_cost();
+                if !residuals_ready {
+                    self.recover_mu();
+                    let (rp, rd, mnp, mnd, c) = self.calculate_residuals_and_cost(false);
+                    r_prim = rp;
+                    r_dual = rd;
+                    max_norm_prim = mnp;
+                    max_norm_dual = mnd;
+                    cost = c;
+                }
                 if self.has_converged(r_prim, r_dual, max_norm_prim, max_norm_dual, cost) {
                     status = SolverStatus::Solved;
                     break;
@@ -289,7 +291,7 @@ impl CosmoSolver {
             if self.settings.time_limit > 0.0
                 && time_limit_start.elapsed().as_secs_f64() > self.settings.time_limit
             {
-                let (rp, rd, mnp, mnd) = self.calculate_residuals(false);
+                let (rp, rd, mnp, mnd, _) = self.calculate_residuals_and_cost(false);
                 r_prim = rp;
                 r_dual = rd;
                 max_norm_prim = mnp;
@@ -302,12 +304,12 @@ impl CosmoSolver {
 
         if status == SolverStatus::Undetermined {
             self.recover_mu();
-            let (rp, rd, mnp, mnd) = self.calculate_residuals(false);
+            let (rp, rd, mnp, mnd, c) = self.calculate_residuals_and_cost(false);
             r_prim = rp;
             r_dual = rd;
             max_norm_prim = mnp;
             max_norm_dual = mnd;
-            cost = self.calculate_cost();
+            cost = c;
             status = SolverStatus::MaxIterReached;
         }
 
@@ -445,14 +447,15 @@ impl CosmoSolver {
         let n = self.n;
         let m = self.m;
         let sigma = self.settings.sigma;
+        // Build the KKT RHS directly in `sol` to avoid an (n+m) copy.
         for i in 0..n {
-            self.ls[i] = sigma * self.w[i] - self.q[i];
+            self.sol[i] = sigma * self.w[i] - self.q[i];
         }
         for i in 0..m {
-            self.ls[n + i] = self.b[i] - 2.0 * self.s[i] + self.w[n + i];
+            self.sol[n + i] = self.b[i] - 2.0 * self.s[i] + self.w[n + i];
         }
         let kkt = self.kkt.as_mut().expect("KKT solver");
-        kkt.solve(&mut self.sol, &self.ls);
+        kkt.solve_inplace(&mut self.sol);
         for i in 0..m {
             self.s_tl[i] = 2.0 * self.s[i] - self.w[n + i] - self.sol[n + i] / self.rho_vec[i];
         }
@@ -557,7 +560,7 @@ impl CosmoSolver {
     }
 
     fn adapt_rho_vec(&mut self, times: &mut Timings) -> Result<bool, CosmoError> {
-        let (r_prim, r_dual, max_p, max_d) = self.calculate_residuals(true);
+        let (r_prim, r_dual, max_p, max_d, _) = self.calculate_residuals_and_cost(true);
         let rp = r_prim / (max_p + 1e-10);
         let rd = r_dual / (max_d + 1e-10);
         let mut new_rho = self.rho * (rp / (rd + 1e-10)).sqrt();
@@ -594,103 +597,109 @@ impl CosmoSolver {
         (x, y, s)
     }
 
-    fn calculate_cost(&mut self) -> f64 {
+    /// Primal/dual residuals, relative-norm components, and objective in one pass.
+    ///
+    /// Reuses `Ax` / `Px` / `A'μ` for both residuals and the `max ‖·‖_∞` terms used
+    /// by the relative tolerance (avoids a second full pair of sparse matvecs).
+    /// Objective uses `xᵀ(Px)` from the dual residual matvec instead of a separate
+    /// `quad_form` sweep.
+    fn calculate_residuals_and_cost(&mut self, ignore_scaling: bool) -> (f64, f64, f64, f64, f64) {
         let n = self.n;
+        let m = self.m;
+        let unscale = self.sm.enabled && !ignore_scaling;
         let x = &self.w_prev[..n];
-        0.5 * quad_form(&self.P, x) * self.sm.cinv
-            + self.sm.cinv * dot(x, &self.q)
-            + self.obj_offset
-    }
 
-    fn calculate_residuals(&mut self, ignore_scaling: bool) -> (f64, f64, f64, f64) {
-        let n = self.n;
-        let x = &self.w_prev[..n];
-        // r_prim = A x + s - b
+        // --- primal: Ax, then r = Ax + s - b ---------------------------------
         gemv(&self.A, &mut self.work_m, x, 1.0, 0.0);
-        for i in 0..self.m {
+        let mut max_p = if unscale {
+            inf_norm_scaled(&self.sm.Einv, &self.work_m)
+        } else {
+            inf_norm(&self.work_m)
+        };
+        max_p = max_p.max(if unscale {
+            inf_norm_scaled(&self.sm.Einv, &self.s)
+        } else {
+            inf_norm(&self.s)
+        });
+        max_p = max_p.max(if unscale {
+            inf_norm_scaled(&self.sm.Einv, &self.b)
+        } else {
+            inf_norm(&self.b)
+        });
+
+        for i in 0..m {
             self.work_m[i] += self.s[i] - self.b[i];
         }
-        if self.sm.enabled && !ignore_scaling {
-            for i in 0..self.m {
+        if unscale {
+            for i in 0..m {
                 self.work_m[i] *= self.sm.Einv[i];
             }
         }
         let r_prim = inf_norm(&self.work_m);
 
-        // r_dual = P x + q - A' μ
+        // --- dual: Px (also feeds the objective), then r = Px + q - A'μ ------
+        let x = &self.w_prev[..n];
         symv(&self.P, &mut self.work_n, x, 1.0, 0.0);
+        // cost = cinv * (½ x'Px + q'x) + offset, with x'Px = x · (Px)
+        let mut xpx = 0.0;
+        let mut xq = 0.0;
         for i in 0..n {
-            self.work_n[i] += self.q[i];
+            xpx += x[i] * self.work_n[i];
+            xq += x[i] * self.q[i];
         }
+        let cost = self.sm.cinv * (0.5 * xpx + xq) + self.obj_offset;
+
+        let mut max_d = if unscale {
+            let mut mnorm = 0.0;
+            for i in 0..n {
+                let a = (self.work_n[i] * self.sm.Dinv[i] * self.sm.cinv).abs();
+                if a > mnorm {
+                    mnorm = a;
+                }
+            }
+            mnorm
+        } else {
+            inf_norm(&self.work_n)
+        };
+        max_d = max_d.max(if unscale {
+            let mut mnorm = 0.0;
+            for i in 0..n {
+                let a = (self.q[i] * self.sm.Dinv[i] * self.sm.cinv).abs();
+                if a > mnorm {
+                    mnorm = a;
+                }
+            }
+            mnorm
+        } else {
+            inf_norm(&self.q)
+        });
+
+        // work_n2 = A' μ; fold into dual residual with a = -1, b = 1 after adding q
         gemv_t(&self.A, &mut self.work_n2, &self.mu, 1.0, 0.0);
+        max_d = max_d.max(if unscale {
+            let mut mnorm = 0.0;
+            for i in 0..n {
+                let a = (self.work_n2[i] * self.sm.Dinv[i] * self.sm.cinv).abs();
+                if a > mnorm {
+                    mnorm = a;
+                }
+            }
+            mnorm
+        } else {
+            inf_norm(&self.work_n2)
+        });
+
         for i in 0..n {
-            self.work_n[i] -= self.work_n2[i];
+            self.work_n[i] += self.q[i] - self.work_n2[i];
         }
-        if self.sm.enabled && !ignore_scaling {
+        if unscale {
             for i in 0..n {
                 self.work_n[i] *= self.sm.Dinv[i] * self.sm.cinv;
             }
         }
         let r_dual = inf_norm(&self.work_n);
 
-        let (max_p, max_d) = self.max_res_component_norm(ignore_scaling);
-        (r_prim, r_dual, max_p, max_d)
-    }
-
-    fn max_res_component_norm(&mut self, ignore_scaling: bool) -> (f64, f64) {
-        let n = self.n;
-        let unscale = self.sm.enabled && !ignore_scaling;
-        let x = &self.w_prev[..n];
-
-        gemv(&self.A, &mut self.work_m, x, 1.0, 0.0);
-        if unscale {
-            for i in 0..self.m {
-                self.work_m[i] *= self.sm.Einv[i];
-            }
-        }
-        let mut max_p = inf_norm(&self.work_m);
-
-        self.work_m.copy_from_slice(&self.s);
-        if unscale {
-            for i in 0..self.m {
-                self.work_m[i] *= self.sm.Einv[i];
-            }
-        }
-        max_p = max_p.max(inf_norm(&self.work_m));
-
-        self.work_m.copy_from_slice(&self.b);
-        if unscale {
-            for i in 0..self.m {
-                self.work_m[i] *= self.sm.Einv[i];
-            }
-        }
-        max_p = max_p.max(inf_norm(&self.work_m));
-
-        let x = &self.w_prev[..n];
-        symv(&self.P, &mut self.work_n, x, 1.0, 0.0);
-        if unscale {
-            for i in 0..n {
-                self.work_n[i] *= self.sm.Dinv[i] * self.sm.cinv;
-            }
-        }
-        let mut max_d = inf_norm(&self.work_n);
-
-        self.work_n.copy_from_slice(&self.q);
-        if unscale {
-            for i in 0..n {
-                self.work_n[i] *= self.sm.Dinv[i] * self.sm.cinv;
-            }
-        }
-        max_d = max_d.max(inf_norm(&self.work_n));
-
-        gemv_t(&self.A, &mut self.work_n, &self.mu, 1.0, 0.0);
-        if unscale {
-            for i in 0..n {
-                self.work_n[i] *= self.sm.Dinv[i] * self.sm.cinv;
-            }
-        }
-        max_d = max_d.max(inf_norm(&self.work_n));
-        (max_p, max_d)
+        (r_prim, r_dual, max_p, max_d, cost)
     }
 
     fn has_converged(&self, r_prim: f64, r_dual: f64, max_p: f64, max_d: f64, cost: f64) -> bool {

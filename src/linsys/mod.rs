@@ -31,6 +31,8 @@ pub struct QdldlKktSolver {
     ldl: QDLDLFactorisation<f64>,
     /// indices of the -1/ρ diagonal entries in the assembled upper-triangular K.nzval
     rho_diag_idx: Vec<usize>,
+    /// scratch for `-1/ρ` values passed to QDLDL `update_values` (no per-adapt alloc)
+    rho_inv_buf: Vec<f64>,
     /// last assembled K, retained so we can rebuild if P/A change
     k_nnz: usize,
 }
@@ -73,14 +75,20 @@ impl QdldlKktSolver {
             n,
             ldl,
             rho_diag_idx,
+            rho_inv_buf: vec![0.0; m],
             k_nnz: K.nnz(),
         })
+    }
+
+    /// Solve `K sol = sol` in place (RHS already written into `sol`).
+    pub fn solve_inplace(&mut self, sol: &mut [f64]) {
+        self.ldl.solve(sol);
     }
 
     /// Solve K sol = rhs in place into `sol` (copies rhs first).
     pub fn solve(&mut self, sol: &mut [f64], rhs: &[f64]) {
         sol.copy_from_slice(rhs);
-        self.ldl.solve(sol);
+        self.solve_inplace(sol);
     }
 
     /// Update the -1/ρ block and numerically refactor (symbolic analysis reused).
@@ -88,8 +96,11 @@ impl QdldlKktSolver {
         if rho.len() != self.m {
             return Err(KktError::Dimension);
         }
-        let vals: Vec<f64> = rho.iter().map(|&r| -1.0 / r).collect();
-        self.ldl.update_values(&self.rho_diag_idx, &vals);
+        for (dst, &r) in self.rho_inv_buf.iter_mut().zip(rho.iter()) {
+            *dst = -1.0 / r;
+        }
+        self.ldl
+            .update_values(&self.rho_diag_idx, &self.rho_inv_buf);
         self.ldl.refactor()?;
         Ok(())
     }
@@ -126,9 +137,10 @@ pub fn assemble_kkt_upper(
 ) -> CscMatrix<f64> {
     let n = P.n;
     let m = A.m;
-    let mut I = Vec::new();
-    let mut J = Vec::new();
-    let mut V = Vec::new();
+    let nnz_est = P.nnz() + A.nnz() + n + m;
+    let mut I = Vec::with_capacity(nnz_est);
+    let mut J = Vec::with_capacity(nnz_est);
+    let mut V = Vec::with_capacity(nnz_est);
 
     for col in 0..n {
         I.push(col);

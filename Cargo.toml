@@ -68,3 +68,7 @@ codegen-units = 1
 
 [profile.bench]
 debug = true
+
+[[example]]
+name = "bench_hotpath"
+path = "examples/rust/bench_hotpath.rs"

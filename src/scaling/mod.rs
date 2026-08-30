@@ -92,7 +92,8 @@ pub fn scale_ruiz(
 
     Ework.fill(1.0);
     if cones.rectify_scaling(&sm.E, &mut Ework) {
-        scale_data(P, A, q, b, &vec![1.0; n], &Ework, 1.0);
+        Dwork.fill(1.0);
+        scale_data(P, A, q, b, &Dwork, &Ework, 1.0);
         for i in 0..m {
             sm.E[i] *= Ework[i];
         }
