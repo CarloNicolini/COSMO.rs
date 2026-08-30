@@ -35,8 +35,8 @@ For design notes, limitations, and the Clarabel.rs numerical comparison, see [`d
 * **Safeguarded acceleration** — Type-II Anderson acceleration with residual-norm safeguarding (from [COSMOAccelerators.jl](https://github.com/oxfordcontrol/COSMOAccelerators.jl))
 * **Infeasibility detection** — Banjac-style certificates without a homogeneous self-dual embedding
 * **CVXPY support** — optional Python bindings expose a `COSMO_RUST` conic solver for CVXPY
-* **Warm starting** — warm-start `x` / `y`, and reuse the factorisation across `update_q` / `update_b`
-* **Persistent workspace** — solve related problems without rebuilding the KKT pattern when only linear terms change
+* **Warm starting** — warm-start `x` / `y`, and reuse the factorisation across `update_q` / `update_b` / same-sparsity `update_p`
+* **Persistent workspace** — solve related problems without rebuilding the KKT pattern when only linear terms change; `update_a` / pattern-changing `update_p` force a rebuild; `reset("cold"|"factor")` clears stale ADMM state for walkforward sequences
 * **Open source** — Apache License 2.0
 
 **Not in this release (see [`docs/limitations.md`](docs/limitations.md)):** SDP / PSD cones, chordal decomposition, clique merging, JuMP/MOI, and pluggable third-party linear solvers beyond Clarabel’s QDLDL.
@@ -127,11 +127,33 @@ uv run python examples/python/cvxpy_lp.py
 ### Warm starts and updates
 
 ```rust
-// Reuse the factorisation when only the linear cost changes.
+use cosmo::WarmStartMode;
+
+// Class A — linear terms only: no KKT rebuild.
 solver.update_q(&q_new).unwrap();
 solver.update_b(&b_new).unwrap();
+
+// Class A — new covariance / Hessian (same sparsity → numeric refactor).
+solver.update_p(&P_new).unwrap();
+solver.reset(WarmStartMode::PersistentFactorization);
+
+// Class B — new scenario matrix (always drops the factorisation).
+solver.update_a(&A_new).unwrap();
+solver.reset(WarmStartMode::ColdStart);
+
 solver.warm_start(Some(&x0), Some(&y0)).unwrap();
 let sol = solver.solve().unwrap();
+```
+
+In Python the same API is exposed on `cosmo_rs.CosmoSolver`:
+
+```python
+solver.update_p(P_new)          # covariance / QP Hessian
+solver.reset("factor")           # drop ADMM state, keep KKT + ρ
+solver.update_a(A_new)          # scenario-return coefficients
+solver.update_b(b_new)
+solver.reset("cold")            # drop ADMM state and reseed ρ
+sol = solver.solve()
 ```
 
 ### Second-order cone

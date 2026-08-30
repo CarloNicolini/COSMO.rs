@@ -4,7 +4,7 @@
 
 use crate::algebra::CscMatrix;
 use crate::cones::Cone;
-use crate::settings::Settings;
+use crate::settings::{Settings, WarmStartMode};
 use crate::solution::{Solution, SolverStatus};
 use crate::solver::CosmoSolver;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -13,12 +13,57 @@ use pyo3::types::PyDict;
 
 struct PyCsc(CscMatrix<f64>);
 
+fn py_index_vec(obj: &Bound<'_, PyAny>) -> PyResult<Vec<usize>> {
+    // SciPy CSC uses int32; accept int32 / int64 / usize sequences.
+    if let Ok(v) = obj.extract::<Vec<usize>>() {
+        return Ok(v);
+    }
+    if let Ok(v) = obj.extract::<Vec<i64>>() {
+        return v
+            .into_iter()
+            .map(|i| {
+                usize::try_from(i)
+                    .map_err(|_| PyValueError::new_err(format!("negative CSC index {i}")))
+            })
+            .collect();
+    }
+    if let Ok(v) = obj.extract::<Vec<i32>>() {
+        return v
+            .into_iter()
+            .map(|i| {
+                usize::try_from(i)
+                    .map_err(|_| PyValueError::new_err(format!("negative CSC index {i}")))
+            })
+            .collect();
+    }
+    Err(PyValueError::new_err(
+        "CSC indices/indptr must be an integer array (int32/int64)",
+    ))
+}
+
 impl<'a> FromPyObject<'a> for PyCsc {
     fn extract_bound(obj: &Bound<'a, PyAny>) -> PyResult<Self> {
-        let nzval: Vec<f64> = obj.getattr("data")?.extract()?;
-        let rowval: Vec<usize> = obj.getattr("indices")?.extract()?;
-        let colptr: Vec<usize> = obj.getattr("indptr")?.extract()?;
-        let shape: Vec<usize> = obj.getattr("shape")?.extract()?;
+        // Accept scipy.sparse.csc_matrix / csr-like objects with .tocsc().
+        let csc = if obj.hasattr("tocsc")? {
+            let fmt: String = obj
+                .getattr("format")
+                .and_then(|f| f.extract())
+                .unwrap_or_default();
+            if fmt == "csc" {
+                obj.clone()
+            } else {
+                obj.call_method0("tocsc")?
+            }
+        } else {
+            obj.clone()
+        };
+        let nzval: Vec<f64> = csc.getattr("data")?.extract()?;
+        let rowval = py_index_vec(&csc.getattr("indices")?)?;
+        let colptr = py_index_vec(&csc.getattr("indptr")?)?;
+        let shape: Vec<usize> = csc.getattr("shape")?.extract()?;
+        if shape.len() != 2 {
+            return Err(PyValueError::new_err("matrix shape must be (m, n)"));
+        }
         Ok(PyCsc(CscMatrix::new(
             shape[0], shape[1], colptr, rowval, nzval,
         )))
@@ -162,6 +207,20 @@ struct PyCosmoSolver {
     inner: CosmoSolver,
 }
 
+fn warm_start_mode_from_str(mode: &str) -> PyResult<WarmStartMode> {
+    match mode.to_ascii_lowercase().as_str() {
+        "cold" | "cold_start" | "coldstart" => Ok(WarmStartMode::ColdStart),
+        "factor" | "persistent_factorization" | "persistent" | "kkt" => {
+            Ok(WarmStartMode::PersistentFactorization)
+        }
+        "solution" | "warm_start_solution" | "warm" => Ok(WarmStartMode::WarmStartSolution),
+        "full" | "warm_start_full_state" | "full_state" => Ok(WarmStartMode::WarmStartFullState),
+        other => Err(PyValueError::new_err(format!(
+            "unknown reset mode '{other}' (expected 'cold', 'factor', 'solution', or 'full')"
+        ))),
+    }
+}
+
 #[pymethods]
 impl PyCosmoSolver {
     #[new]
@@ -181,6 +240,7 @@ impl PyCosmoSolver {
         Ok(Self { inner })
     }
 
+    /// Solve the current problem. Reuses a valid KKT factorisation when possible.
     fn solve(&mut self, py: Python<'_>) -> PyResult<PySolution> {
         let sol = py
             .allow_threads(|| self.inner.solve())
@@ -188,18 +248,57 @@ impl PyCosmoSolver {
         Ok(PySolution::from(sol))
     }
 
+    /// Update the linear cost `q` (unscaled). Does not refactor the KKT system.
     fn update_q(&mut self, q: Vec<f64>) -> PyResult<()> {
         self.inner
             .update_q(&q)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
+    /// Update the right-hand side `b` (unscaled). Does not refactor the KKT system.
     fn update_b(&mut self, b: Vec<f64>) -> PyResult<()> {
         self.inner
             .update_b(&b)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
+    /// Update the Hessian `P` (unscaled, preferably upper-triangular CSC).
+    ///
+    /// Same sparsity pattern → numerical KKT refactor. Pattern change → full
+    /// rebuild on the next `solve()`.
+    fn update_p(&mut self, P: PyCsc) -> PyResult<()> {
+        self.inner
+            .update_p(&P.0)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Update the constraint matrix `A` (unscaled CSC).
+    ///
+    /// Drops the current KKT factorisation; the next `solve()` rebuilds it.
+    fn update_a(&mut self, A: PyCsc) -> PyResult<()> {
+        self.inner
+            .update_a(&A.0)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Drop ADMM iterates while optionally keeping the KKT factorisation.
+    ///
+    /// Modes:
+    /// - ``"cold"`` — zero ``x`` / ``s`` / duals, reseed ``ρ`` on the next solve,
+    ///   restart the accelerator; keep the factorisation if still valid.
+    /// - ``"factor"`` — zero ADMM iterates but keep ``ρ`` and the current
+    ///   factorisation (use when ``P``/``A``/``ρ``/``σ`` are unchanged).
+    /// - ``"solution"`` / ``"full"`` — no-ops that keep warm-start state
+    ///   (mirrors the Rust ``WarmStartMode`` enum).
+    #[pyo3(signature = (mode = "cold"))]
+    fn reset(&mut self, mode: &str) -> PyResult<()> {
+        let mode = warm_start_mode_from_str(mode)?;
+        self.inner.reset(mode);
+        Ok(())
+    }
+
+    /// Warm-start primal ``x`` and/or dual ``y`` (unscaled). ``y = -μ``.
+    #[pyo3(signature = (x = None, y = None))]
     fn warm_start(&mut self, x: Option<Vec<f64>>, y: Option<Vec<f64>>) -> PyResult<()> {
         self.inner
             .warm_start(x.as_deref(), y.as_deref())
