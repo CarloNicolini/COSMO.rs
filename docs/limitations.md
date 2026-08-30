@@ -19,8 +19,10 @@ This file states what COSMO.rs does **not** claim.
 ## Warm starts and factorisation
 
 - `update_q` / `update_b` never refactor.
-- `update_p` / `update_a` always numerically refactor. Symbolic AMD is rebuilt on pattern change (`update_a` currently always rebuilds).
-- Warm starts help when the next problem is a small perturbation of a solved one. They can hurt if the previous iterate is far from the new solution; use `WarmStartMode::ColdStart`.
+- `update_p`: same CSC sparsity → numerical KKT refactor; pattern change → drop factorisation and rebuild on the next `solve`.
+- `update_a`: always drops the KKT factorisation (scenario / constraint matrix change).
+- `reset("cold")` zeros ADMM iterates and reseeds `ρ` on the next solve; `reset("factor")` zeros iterates but keeps `ρ` and the current factorisation.
+- Warm starts help when the next problem is a small perturbation of a solved one. They can hurt if the previous iterate is far from the new solution; use `WarmStartMode::ColdStart` / `reset("cold")`.
 - After ρ adaptation, the accelerator is restarted (COSMO.jl behaviour).
 
 ## Infeasibility / unboundedness

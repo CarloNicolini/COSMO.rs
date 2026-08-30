@@ -383,8 +383,7 @@ fn stress_cases() -> Vec<StressCase> {
 
 fn run_one(c: &StressCase) -> (CompareReport, cosmo::Solution) {
     let (P, q, A, b, cones) = &c.problem;
-    let mut solver =
-        CosmoSolver::new(P, q, A, b, cones.clone(), c.settings.clone()).unwrap();
+    let mut solver = CosmoSolver::new(P, q, A, b, cones.clone(), c.settings.clone()).unwrap();
     let sol = solver.solve().unwrap().clone();
     let r = compare_report(
         c.name,
@@ -503,9 +502,7 @@ fn stress_cosmo_fail_while_clarabel_ok() {
         eprintln!("  - {g}");
     }
     if !recovered.is_empty() {
-        eprintln!(
-            "Note: previously hard cases now agree (good): {recovered:?}"
-        );
+        eprintln!("Note: previously hard cases now agree (good): {recovered:?}");
     }
 
     assert!(

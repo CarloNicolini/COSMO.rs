@@ -816,10 +816,16 @@ impl CosmoSolver {
             }
             WarmStartMode::WarmStartSolution | WarmStartMode::WarmStartFullState => {}
             WarmStartMode::PersistentFactorization => {
+                // Keep ρ / KKT; drop primal–dual iterates and accelerator history
+                // so a structurally related but distinct problem does not inherit
+                // a stale ADMM trajectory.
                 self.w.fill(0.0);
                 self.w_prev.fill(0.0);
                 self.s.fill(0.0);
                 self.mu.fill(0.0);
+                if let Some(aa) = self.accelerator.as_mut() {
+                    aa.restart();
+                }
             }
         }
     }
